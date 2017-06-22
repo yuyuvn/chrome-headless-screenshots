@@ -15,67 +15,69 @@ const output = argv.output || `output.${format === 'png' ? 'png' : 'jpg'}`;
 
 init();
 
-async function init() {
-  try {
-    // Start the Chrome Debugging Protocol
-    const client = await CDP();
-    // Extract used DevTools domains.
-    const {DOM, Emulation, Network, Page, Runtime} = client;
+function init() {
+  var client, DOM, Emulation, Network, Page, Runtime;
+  CDP((c) => {
+    client = c;
+    DOM = client.DOM;
+    Emulation = client.Emulation;
+    Network = client.Network;
+    Page = client.Page;
+    Runtime = client.Runtime;
 
-    // Enable events on domains we are interested in.
-    await Page.enable();
-    await DOM.enable();
-    await Network.enable();
-
-    // If user agent override was specified, pass to Network domain
-    if (userAgent) {
-      await Network.setUserAgentOverride({userAgent});
-    }
-
-    // Set up viewport resolution, etc.
-    const deviceMetrics = {
-      width: viewportWidth,
-      height: viewportHeight,
-      deviceScaleFactor: 0,
-      mobile: false,
-      fitWindow: false,
-    };
-    await Emulation.setDeviceMetricsOverride(deviceMetrics);
-    await Emulation.setVisibleSize({
-      width: viewportWidth,
-      height: viewportHeight,
-    });
-
-    // Navigate to target page
-    await Page.navigate({url});
-
-    // Wait for page load event to take screenshot
-    await Page.loadEventFired();
-
-    await timeout(delay);
-
-    // If the `full` CLI option was passed, we need to measure the height of
-    // the rendered page and use Emulation.setVisibleSize
-    if (fullPage) {
-      const {root: {nodeId: documentNodeId}} = await DOM.getDocument();
-      const {nodeId: bodyNodeId} = await DOM.querySelector({
-        selector: 'body',
-        nodeId: documentNodeId,
-      });
-      const {model: {height}} = await DOM.getBoxModel({nodeId: bodyNodeId});
-
-      await Emulation.setVisibleSize({width: viewportWidth, height: height});
-      // This forceViewport call ensures that content outside the viewport is
-      // rendered, otherwise it shows up as grey. Possibly a bug?
-      await Emulation.forceViewport({x: 0, y: 0, scale: 1});
-    }
-
-    const screenshot = await Page.captureScreenshot({format});
-    const buffer = new Buffer(screenshot.data, 'base64');
-    await file.writeFile(output, buffer, 'base64');
-    console.log('Screenshot saved');
-    client.close();
-  } catch (err) {
-    console.error('Exception while taking screenshot:', err);
-  }
+    Promise.all([
+        Network.enable(),
+        Page.enable(),
+        DOM.enable
+    ]).then(() => {
+      const deviceMetrics = {
+        width: viewportWidth,
+        height: viewportHeight,
+        deviceScaleFactor: 0,
+        mobile: false,
+        fitWindow: false,
+      };
+      return Emulation.setDeviceMetricsOverride(deviceMetrics);
+    }).then(() => Emulation.setVisibleSize({
+        width: viewportWidth,
+        height: viewportHeight,
+      }))
+    .then(() => Page.navigate({url}))
+    .then(() => Page.loadEventFired())
+    .then(() => timeout(delay))
+    .then(() => {
+      if (fullPage) {
+        return DOM.getDocument().then((document) => {
+          const documentNodeId = document.root.nodeId;
+          return DOM.querySelector({
+            selector: 'body',
+            nodeId: documentNodeId,
+          })
+        }).then((querySelector) => {
+          const bodyNodeId =  querySelector.nodeId;
+          return DOM.getBoxModel({nodeId: bodyNodeId});
+        }).then((boxModel) => {
+          const height = boxModel.model.height;
+          return Emulation.setVisibleSize({width: viewportWidth, height: height});
+        }).then(() => Emulation.forceViewport({x: 0, y: 0, scale: 1}))
+      } else {
+        return Promise.resolve();
+      }
+    }).then(() => Page.captureScreenshot({format, fromSurface: true}))
+    .then((screenshot) => {
+      const buffer = new Buffer(screenshot.data, 'base64');
+      return file.writeFile(output, buffer, 'base64');
+    }).then(() => {
+      console.log('Screenshot saved');
+      client.close();
+      process.exit(1);
+    }).catch(() => {
+      console.error('Exception while taking screenshot:', err);
+      process.exit();
+    })
+  }).on('error', (err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }
+process.stdin.resume();
